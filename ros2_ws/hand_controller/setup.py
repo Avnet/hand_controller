@@ -11,6 +11,12 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+
+        (os.path.join('share', package_name, 'resources_low'), 
+            glob('resources_low/**/*', recursive=True) + glob('resources_low/.*')),
+        (os.path.join('share', package_name, 'resources_high'), 
+            glob('resources_high/**/*', recursive=True) + glob('resources_high/.*')),
+
         # Include all launch files.
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
     ],
@@ -33,6 +39,7 @@ setup(
             'hand_controller_mp1dials_joints_node = hand_controller.hand_controller_mp1dials_joints_node:main',
             'hand_controller_mp1dials_pose_node = hand_controller.hand_controller_mp1dials_pose_node:main',
             'hand_controller_ei1dials_twist_node = hand_controller.hand_controller_ei1dials_twist_node:main',
+            'gtk_gui_node = hand_controller.gtk_gui_node:main',
         ],
     },
 )
