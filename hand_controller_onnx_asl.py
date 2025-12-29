@@ -248,7 +248,7 @@ thresh_confidence = 0.5
 thresh_confidence_prev = thresh_confidence
 
 print("================================================================")
-print("Hand Controller (ONNX) with ASL (PyTorch)")
+print("Hand Controller (ONNX) with ASL (ONNX)")
 print("================================================================")
 print("\tPress ESC to quit ...")
 print("----------------------------------------------------------------")

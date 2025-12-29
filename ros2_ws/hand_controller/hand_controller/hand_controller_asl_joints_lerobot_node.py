@@ -21,12 +21,12 @@ import rclpy
 from rclpy.node import Node
 
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import JointState
 # import CV BRIDGE
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
 
-#from std_msgs.msg import String
-from geometry_msgs.msg import Twist
+#from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 # PointNet (for Hands) references : 
 #    https://medium.com/@er_95882/asl-recognition-using-pointnet-and-mediapipe-f2efda78d089
@@ -50,15 +50,15 @@ char2int = {
 
 
 @torch.no_grad()        
-class HandControllerAslTwistNode(Node):
+class HandControllerAslJointsNode(Node):
 
     def __init__(self):
-        super().__init__('hand_controller_asl_twist_node')
+        super().__init__('hand_controller_asl_joints_lerobot_node')
         self.subscriber1_ = self.create_subscription(Image,'image_raw',self.listener_callback,10)
         self.subscriber1_  # prevent unused variable warning
         self.publisher1_ = self.create_publisher(Image, 'hand_controller/image_annotated', 10)
-        # Create publisher for velocity command (twist)
-        self.publisher2_ = self.create_publisher(Twist, 'hand_controller/cmd_vel', 10)        
+        # Create publishers for the '/arm_controller/joint_trajectory' topic
+        self.publisher2_ = self.create_publisher(JointState, '/so101_follower/joint_commands', 10)
 
         # verbose
         self.declare_parameter("verbose", True)
@@ -128,6 +128,22 @@ class HandControllerAslTwistNode(Node):
         self.asl_sign = ""
         self.actionDetected = ""        
 
+        # Create the JointTrajectory messages
+        self.lerobot_joint_states = JointState()
+        self.lerobot_joint_states.name     = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper']
+        self.lerobot_joint_states.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.lerobot_joint_states.velocity = []
+        self.lerobot_joint_states.effort   = []                
+        
+        # Publish the message
+        if self.verbose:
+            #self.get_logger().info(f"Publishing arm joint angles : {self.arm_trajectory_command.points}")
+            shoulder_pan_joint = self.lerobot_joint_states.position[0]
+            shoulder_lift_joint = self.lerobot_joint_states.position[1]
+            elbow_joint = self.lerobot_joint_states.position[2]
+            self.get_logger().info(f"ShoulderPanJoint={shoulder_pan_joint:+.3f} ShoulderLiftJoint={shoulder_lift_joint:+.3f} ElbowJoint={elbow_joint:+.3f}")
+        self.publisher2_.publish(self.lerobot_joint_states)
+
         # Additional Settings (for text overlay)
         self.scale = 1.0
         self.text_fontType = cv2.FONT_HERSHEY_SIMPLEX
@@ -186,15 +202,6 @@ class HandControllerAslTwistNode(Node):
             #
             # ASL
             # 
-
-            # Create message
-            msg = Twist()
-            msg.linear.x = 0.0
-            msg.linear.y = 0.0
-            msg.linear.z = 0.0
-            msg.angular.x = 0.0
-            msg.angular.y = 0.0
-            msg.angular.z = 0.0
 
             for i in range(len(flags)):
 
@@ -282,9 +289,13 @@ class HandControllerAslTwistNode(Node):
                         if asl_sign == 'B':
                           self.actionDetected = "B : Back-Up"
                         if asl_sign == 'L':
-                          self.actionDetected = "L : Turn Left"
+                          self.actionDetected = "L : Left"
                         if asl_sign == 'R':
-                          self.actionDetected = "R : Turn Right"
+                          self.actionDetected = "R : Right"
+                        if asl_sign == 'U':
+                          self.actionDetected = "U : Up"
+                        if asl_sign == 'Y':
+                          self.actionDetected = "Y : Down"
 
                         action_text = '['+self.actionDetected+']'
                         cv2.putText(annotated_image,action_text,
@@ -298,7 +309,10 @@ class HandControllerAslTwistNode(Node):
  
                     if handedness == "Right":
                         # Define action
-                        # ... TBD ...
+                        if asl_sign == 'A':
+                          self.actionDetected = "A : Close Gripper"
+                        if asl_sign == 'B':
+                          self.actionDetected = "B : Open Gripper"
 
                         action_text = '['+self.actionDetected+']'
                         cv2.putText(annotated_image,action_text,
@@ -316,33 +330,81 @@ class HandControllerAslTwistNode(Node):
 
                 if handedness == "Left" and self.actionDetected != "":
                     try:
+                        # shoulder pan joint : index 0, range -2.055(L) to +2.055(R)
+                        shoulder_pan_joint = self.lerobot_joint_states.position[0]
+                        if self.actionDetected == "L : Left":
+                            shoulder_pan_joint -= 0.01
+                            if shoulder_pan_joint < -2.05:
+                                shoulder_pan_joint = -2.05
+                        if self.actionDetected == "R : Right":
+                            shoulder_pan_joint += 0.01
+                            if shoulder_pan_joint > +2.05:
+                                shoulder_pan_joint = +2.05
+                        self.lerobot_joint_states.position[0] = shoulder_pan_joint
+                                                
+                        # shoulder lift joint : index 1, range +2.01(A) to -2.01(B)
+                        shoulder_lift_joint = self.lerobot_joint_states.position[1]
                         if self.actionDetected == "A : Advance":
-                          # Modify message to advance (+ve value on x axis)
-                          msg.linear.x = 2.0
+                            shoulder_lift_joint += 0.01
+                            if shoulder_lift_joint > +2.01:
+                                shoulder_lift_joint = +2.01
                         if self.actionDetected == "B : Back-Up":
-                          # Modify message to backup (-ve value on x axis)
-                          msg.linear.x = -2.0
+                            shoulder_lift_joint -= 0.01
+                            if shoulder_lift_joint < -2.01:
+                                shoulder_lift_joint = -2.01
+                        self.lerobot_joint_states.position[1] = shoulder_lift_joint
 
-                        if self.actionDetected == "L : Turn Left":
-                          # Modify message to advance (+ve value on x axis)
-                          msg.linear.x = 2.0
-                          # Modify message to turn left (+ve value on z axis)
-                          msg.angular.z = 2.0
-                        if self.actionDetected == "R : Turn Right":
-                          # Modify message to advance (+ve value on x axis)
-                          msg.linear.x = 2.0
-                          # Modify message to turn right (-ve value on z axis)
-                          msg.angular.z = -2.0
+                        # wrist_flex : index 3, range -1.78(U) to +1.78(D)
+                        wrist_flex = self.lerobot_joint_states.position[3]
+                        if self.actionDetected == "U : Up":
+                            wrist_flex -= 0.01
+                            if wrist_flex < -1.78:
+                                wrist_flex = -1.78
+                        if self.actionDetected == "Y : Down":
+                            wrist_flex += 0.01
+                            if wrist_flex > +1.78:
+                                wrist_flex = +1.78
+                        self.lerobot_joint_states.position[3] = wrist_flex
+                        
+
+                        if self.verbose:
+                            self.get_logger().info(f"shoulder_pan={shoulder_pan_joint:+.3f} shoulder_lift={shoulder_lift_joint:+.3f} wrist_flex={wrist_flex:+.3f}")
+
+                        # Publish the message
+                        self.publisher2_.publish(self.lerobot_joint_states)
+                        
 
                     except Exception as e:
-                        self.get_logger().warn(f"Error publishing twist message: {e}")
+                        self.get_logger().warn(f"Error publishing arm joint angles: {e}")
 
-            self.publisher2_.publish(msg)
+                if handedness == "Right" and self.actionDetected != "":
+                    try:
+                        # gripper : index 5, range -1.75(closed) - +1.75(open)
+                        gripper = self.lerobot_joint_states.position[5]
+                        if self.actionDetected == "A : Close Gripper":
+                            gripper -= 0.05
+                            if gripper < -1.75:
+                                gripper = -1.75
+                        if self.actionDetected == "B : Open Gripper":
+                            gripper += 0.05
+                            if gripper > +1.75:
+                                gripper = +1.75
+                        self.lerobot_joint_states.position[5] = gripper
+
+
+                        if self.verbose:
+                            self.get_logger().info(f"gripper={gripper:+.3f}")
+
+                        # Publish the message
+                        self.publisher2_.publish(self.lerobot_joint_states)
+
+                    except Exception as e:
+                        self.get_logger().warn(f"Error publishing gripper joint angles: {e}")
                 
         if self.use_imshow == True:
             # DISPLAY
             cv2_bgr_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-            cv2.imshow('hand_controller_asl_twist_node',cv2_bgr_image)
+            cv2.imshow('hand_controller_asl_joints_lerobot_node',cv2_bgr_image)
             cv2.waitKey(1)                    
         
         # CONVERT BACK TO ROS & PUBLISH
@@ -353,14 +415,14 @@ class HandControllerAslTwistNode(Node):
 def main(args=None):
     rclpy.init(args=args)
 
-    hand_controller_asl_twist_node = HandControllerAslTwistNode()
+    hand_controller_asl_joints_node = HandControllerAslJointsNode()
 
-    rclpy.spin(hand_controller_asl_twist_node)
+    rclpy.spin(hand_controller_asl_joints_node)
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    hand_controller_asl_twist_node.destroy_node()
+    hand_controller_asl_joints_node.destroy_node()
     rclpy.shutdown()
 
 
