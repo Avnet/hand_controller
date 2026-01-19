@@ -25,8 +25,8 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
 
-from tf2_ros import Buffer, TransformListener
-from geometry_msgs.msg import PoseStamped, TransformStamped
+#from std_msgs.msg import String
+from geometry_msgs.msg import Twist
 
 # PointNet (for Hands) references : 
 #    https://medium.com/@er_95882/asl-recognition-using-pointnet-and-mediapipe-f2efda78d089
@@ -50,16 +50,15 @@ char2int = {
 
 
 @torch.no_grad()        
-class HandControllerAslPoseNode(Node):
+class HandControllerQai2AslTwistNode(Node):
 
     def __init__(self):
-        super().__init__('hand_controller_asl_pose_node')
+        super().__init__('hand_controller_qai2asl_twist_node')
         self.subscriber1_ = self.create_subscription(Image,'image_raw',self.listener_callback,10)
         self.subscriber1_  # prevent unused variable warning
         self.publisher1_ = self.create_publisher(Image, 'hand_controller/image_annotated', 10)
-        # Create publishers for the current and target pose
-        self.publisher3_ = self.create_publisher(PoseStamped, 'hand_controller/current_pose', 10)        
-        self.publisher4_ = self.create_publisher(PoseStamped, 'hand_controller/target_pose', 10)        
+        # Create publisher for velocity command (twist)
+        self.publisher2_ = self.create_publisher(Twist, 'hand_controller/cmd_vel', 10)        
 
         # verbose
         self.declare_parameter("verbose", True)
@@ -83,9 +82,9 @@ class HandControllerAslPoseNode(Node):
         self.bShowLandmarks = True
         
         # Blaze models
-        self.declare_parameter("blaze_target", "blaze_tflite")
-        self.declare_parameter("blaze_model1", "palm_detection_lite.tflite")
-        self.declare_parameter("blaze_model2", "hand_landmark_lite.tflite")
+        self.declare_parameter("blaze_target", "blaze_qairt")
+        self.declare_parameter("blaze_model1", "palm_detection_full.bin")
+        self.declare_parameter("blaze_model2", "hand_landmark_full.bin")
         self.blaze_target = self.get_parameter('blaze_target').value
         self.blaze_model1 = self.get_parameter('blaze_model1').value
         self.blaze_model2 = self.get_parameter('blaze_model2').value
@@ -112,6 +111,9 @@ class HandControllerAslPoseNode(Node):
         if self.blaze_target == "blaze_pytorch":
             from blaze_pytorch.blazedetector import BlazeDetector
             from blaze_pytorch.blazelandmark import BlazeLandmark
+        if self.blaze_target == "blaze_qairt":
+            from blaze_qairt.blazedetector import BlazeDetector
+            from blaze_qairt.blazelandmark import BlazeLandmark
         #
         self.detector_type = "blazepalm"
         self.landmark_type = "blazehandlandmark"
@@ -142,17 +144,6 @@ class HandControllerAslPoseNode(Node):
         # Sign Detection status
         self.asl_sign = ""
         self.actionDetected = ""        
-
-        # Declare frames as parameters (can be overridden at launch)
-        self.declare_parameter('source_frame', 'base_link')
-        self.declare_parameter('target_frame', 'gripper_base')
-
-        self.source_frame = self.get_parameter('source_frame').get_parameter_value().string_value
-        self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
-
-        # TF2 setup
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Additional Settings (for text overlay)
         self.scale = 1.0
@@ -212,6 +203,15 @@ class HandControllerAslPoseNode(Node):
             #
             # ASL
             # 
+
+            # Create message
+            msg = Twist()
+            msg.linear.x = 0.0
+            msg.linear.y = 0.0
+            msg.linear.z = 0.0
+            msg.angular.x = 0.0
+            msg.angular.y = 0.0
+            msg.angular.z = 0.0
 
             for i in range(len(flags)):
 
@@ -299,13 +299,9 @@ class HandControllerAslPoseNode(Node):
                         if asl_sign == 'B':
                           self.actionDetected = "B : Back-Up"
                         if asl_sign == 'L':
-                          self.actionDetected = "L : Left"
+                          self.actionDetected = "L : Turn Left"
                         if asl_sign == 'R':
-                          self.actionDetected = "R : Right"
-                        if asl_sign == 'U':
-                          self.actionDetected = "U : Up"
-                        if asl_sign == 'Y':
-                          self.actionDetected = "Y : Down"
+                          self.actionDetected = "R : Turn Right"
 
                         action_text = '['+self.actionDetected+']'
                         cv2.putText(annotated_image,action_text,
@@ -337,59 +333,33 @@ class HandControllerAslPoseNode(Node):
 
                 if handedness == "Left" and self.actionDetected != "":
                     try:
-                        now = rclpy.time.Time()
-                        trans: TransformStamped = self.tf_buffer.lookup_transform(
-                            self.source_frame,
-                            self.target_frame,
-                            now,
-                            timeout=rclpy.duration.Duration(seconds=0.5)
-                        )
-
-                        current_pose_msg = PoseStamped()
-                        current_pose_msg.header = trans.header
-                        current_pose_msg.pose.position.x = trans.transform.translation.x
-                        current_pose_msg.pose.position.y = trans.transform.translation.y
-                        current_pose_msg.pose.position.z = trans.transform.translation.z
-                        current_pose_msg.pose.orientation = trans.transform.rotation
-
-                        self.publisher3_.publish(current_pose_msg)
-                        if self.verbose:
-                            self.get_logger().info(f"Published current pose: {current_pose_msg.pose.position}")
-                        
-                        target_pose_msg = PoseStamped()
-                        target_pose_msg.header = trans.header
-                        target_pose_msg.pose.position.x = trans.transform.translation.x
-                        target_pose_msg.pose.position.y = trans.transform.translation.y
-                        target_pose_msg.pose.position.z = trans.transform.translation.z
-                        target_pose_msg.pose.orientation = trans.transform.rotation
-                        
-                        if self.actionDetected == "U : Up":
-                          target_pose_msg.pose.position.z = target_pose_msg.pose.position.z + 0.02 #2.0
-                        if self.actionDetected == "Y : Down":
-                          target_pose_msg.pose.position.z = target_pose_msg.pose.position.z - 0.02 #2.0
-
                         if self.actionDetected == "A : Advance":
-                          target_pose_msg.pose.position.y = target_pose_msg.pose.position.y + 0.02 #2.0
+                          # Modify message to advance (+ve value on x axis)
+                          msg.linear.x = 2.0
                         if self.actionDetected == "B : Back-Up":
-                          target_pose_msg.pose.position.y = target_pose_msg.pose.position.y - 0.02 #2.0
+                          # Modify message to backup (-ve value on x axis)
+                          msg.linear.x = -2.0
 
-                        if self.actionDetected == "L : Left":
-                          target_pose_msg.pose.position.x = target_pose_msg.pose.position.x - 0.02 #2.0
-                        if self.actionDetected == "R : Right":
-                          target_pose_msg.pose.position.x = target_pose_msg.pose.position.x + 0.02 #2.0
-
-                        self.publisher4_.publish(target_pose_msg)
-                        if self.verbose:
-                            self.get_logger().info(f"Published target  pose: {target_pose_msg.pose.position}")
-                        
+                        if self.actionDetected == "L : Turn Left":
+                          # Modify message to advance (+ve value on x axis)
+                          msg.linear.x = 2.0
+                          # Modify message to turn left (+ve value on z axis)
+                          msg.angular.z = 2.0
+                        if self.actionDetected == "R : Turn Right":
+                          # Modify message to advance (+ve value on x axis)
+                          msg.linear.x = 2.0
+                          # Modify message to turn right (-ve value on z axis)
+                          msg.angular.z = -2.0
 
                     except Exception as e:
-                        self.get_logger().warn(f"TF lookup failed: {e}")
+                        self.get_logger().warn(f"Error publishing twist message: {e}")
 
+            self.publisher2_.publish(msg)
+                
         if self.use_imshow == True:
             # DISPLAY
             cv2_bgr_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-            cv2.imshow('hand_controller_asl_pose_node',cv2_bgr_image)
+            cv2.imshow('hand_controller_qai2asl_twist_node',cv2_bgr_image)
             cv2.waitKey(1)                    
         
         # CONVERT BACK TO ROS & PUBLISH
@@ -400,14 +370,14 @@ class HandControllerAslPoseNode(Node):
 def main(args=None):
     rclpy.init(args=args)
 
-    hand_controller_asl_pose_node = HandControllerAslPoseNode()
+    hand_controller_qai2asl_twist_node = HandControllerQai2AslTwistNode()
 
-    rclpy.spin(hand_controller_asl_pose_node)
+    rclpy.spin(hand_controller_qai2asl_twist_node)
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    hand_controller_asl_pose_node.destroy_node()
+    hand_controller_qai2asl_twist_node.destroy_node()
     rclpy.shutdown()
 
 

@@ -8,5 +8,5 @@ export ROS_DOMAIN_ID=0
 source /usr/bin/ros_setup.sh && source /usr/share/qirp-setup.sh
 source /root/lekiwi_ros2/src/install/setup.bash
 source /root/hand_controller/ros2_ws/install/setup.bash
-ros2 launch hand_controller demo13_lekiwi_part1_ei1dials.launch.py verbose:=False model:=/root/hand_controller/hands-v2-yolov5-linux-aarch64-qnn-v36.eim use_flask:=False use_imshow:=False x_t:=0.20 z_t:=0.20 | ros2 run hand_controller gtk_gui_node
+ros2 launch hand_controller demo13_lekiwi_part1_ei1dials.launch.py verbose:=False model:=/root/hand_controller/hands-v2-yolov5-linux-aarch64-qnn-v36.eim use_flask:=False use_imshow:=False x_t:=0.20 x_a:=0.0 x_b:=10.0 z_t:=0.20 z_a:=0.0 z_b:=2.0 | ros2 run hand_controller gtk_gui_node
 
